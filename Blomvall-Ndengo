@@ -1,0 +1,267 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import QuantLib as ql
+import numpy as np
+import datetime as dt
+from amplpy import AMPL, DataFrame, Environment
+import math
+
+# This is an example implementation of the Blomvall-Ndengo optimization model from their 2013 paper.
+# Requires AMPL. Works with the demo license as the optimization problem is less than 300 variables in size.
+
+# Explanation of some variables 
+
+# T0OIS: Settlement dates, TNOIS: Maturity dates
+# TiOIS: Dates for cash flows
+# NtOIS: Number of cash flows for contracts
+
+# E and F are the deviation and penalty parameters
+# Setting E = F = 0 is equivalent to exact repricing
+
+
+# Sample data. Few quotes to be compatible with demo license
+
+OIS = [ -0.074, -0.054, -0.053, -0.053 ]
+OIS_tenors = [ "1W", "1M", "2M", "3M" ]
+
+OIS = pd.Series(data=OIS)/100
+
+# Start AMPL
+# Change the directory to where your AMPL and mod file are located
+
+ampl = AMPL(Environment('C:/Users/Lucas/Documents/Schoolwork/Master/Exjobb/Programmering/AMPL/ampl_mswin64'))
+ampl.setOption('solver', 'ipopt')
+
+ampl.read('C:/Users/Lucas/Documents/Schoolwork/Master/Exjobb/Programmering/AMPL/ampl_mswin64/opt5.mod')
+print("Read mod file successfully")
+
+# Date
+
+dateOIS = dt.datetime(2022,3,18)
+
+# Set valuation date 
+
+valuation_date = ql.Date(
+dateOIS.day, dateOIS.month, dateOIS.year)
+ql.Settings.instance().evaluationDate = valuation_date
+    
+# Settlement date
+
+settlement_days = 2
+print("Settlement days: ",str(settlement_days))
+
+
+# T0OIS: Settlement dates, TNOIS: Maturity dates
+
+nOIS = len(OIS)-1
+pOIS = OIS.values.tolist()
+
+TNOIS = []
+T0OIS = []
+
+for i in range(nOIS+1):
+    T0OIS.append(settlement_days)
+    TNOIS.append(ql.Sweden().advance(valuation_date,ql.Period(OIS_tenors[i]))-valuation_date)
+
+
+
+# dtOIS: Time between cashflows for OIS contracts
+
+dtOIS = []
+helper = []
+
+for i in range(nOIS+1):
+    s = OIS_tenors[i]
+    if s.find("Y") == 1:
+        k = int(s[0])
+        for n in range(k):
+            day_count = ql.Thirty360(False).yearFraction(ql.Sweden().advance(valuation_date+settlement_days,ql.Period(str(n)+"Y")), ql.Sweden().advance(valuation_date,ql.Period(str(n+1)+"Y")))
+            helper.append(day_count)
+        lst = [0]*(nOIS-n)
+        helper.extend(lst)
+        dtOIS.append(helper)
+        helper = []
+    else:
+        day_count = ql.Thirty360(False).yearFraction(valuation_date+settlement_days, ql.Sweden().advance(valuation_date,ql.Period(OIS_tenors[i])))
+        helper.append(day_count)
+        lst = [0]*(nOIS)
+        helper.extend(lst)
+        dtOIS.append(helper)
+        helper = []
+
+# TiOIS: Time points for payments 
+
+TiOIS = []
+helper = []
+        
+for i in range(nOIS+1):
+    s = OIS_tenors[i]
+    if s.find("Y") == 1:
+        k = int(s[0])
+        for n in range(k):
+            day_count = ql.Sweden().advance(valuation_date,ql.Period(str(n+1)+"Y"))-valuation_date
+            helper.append(day_count)
+        lst = [0]*(nOIS-n)
+        helper.extend(lst)
+        TiOIS.append(helper)
+        helper = []
+    else:
+        day_count = ql.Sweden().advance(valuation_date,ql.Period(OIS_tenors[i]))-valuation_date
+        helper.append(day_count)
+        lst = [0]*(nOIS)
+        helper.extend(lst)
+        TiOIS.append(helper)
+        helper = []
+
+
+# Set deviation and penalty parameters
+
+F = 0 # 1
+E = 0 # 10
+
+tOIS = nOIS
+FOIS = [F]*(nOIS+1)
+EOIS = [E]*(nOIS+1)
+NtOIS = np.count_nonzero(dtOIS,axis=1) - 1
+print("NtOIS: ",str(NtOIS))
+_tOIS = list(range(0,tOIS+1))
+_nOIS = list(range(0,nOIS+1))
+
+print("TiOIS: ",str(len(TiOIS)))
+print("TNOIS: ",str(len(TNOIS)))
+print("T0OIS: ",str(len(T0OIS)))
+print("NtOIS: ",str(len(NtOIS)))
+print("dtOIS: ",str(len(dtOIS)))
+
+
+xi = 1/365
+n = int(np.max(TiOIS))
+print("n: ",str(n))
+a = []
+for time in range(n+1):
+    if time <= 730:
+        #a.append(math.exp(((time)/365-2)*math.log(4))) # Information decay. Optional.
+        a.append(1)
+    else:
+        a.append(1)
+
+# Execute AMPL
+
+print("Start AMPL")
+
+# Set OIS values
+
+ampl.getParameter('nOIS').set(nOIS)
+ampl.getParameter('tOIS').set(tOIS)
+ampl.getParameter('xi').set(xi)
+ampl.getParameter('n').set(n)
+
+ampl.getParameter('FOIS').setValues(FOIS)
+ampl.getParameter('EOIS').setValues(EOIS)
+ampl.getParameter('NtOIS').setValues(NtOIS)
+    
+ampl.getParameter('a').setValues(a)
+ampl.getParameter('pOIS').setValues(pOIS)
+ampl.getParameter('T0OIS').setValues(T0OIS)
+ampl.getParameter('TNOIS').setValues(TNOIS)
+    
+temp = DataFrame(('tOIS', 'nOIS'), 'dtOIS')
+temp.setValues({
+    (ric, time): dtOIS[ric][time]
+    for time in _tOIS
+    for ric in _nOIS
+})
+
+ampl.setData(temp)
+
+temp = DataFrame(('tOIS', 'nOIS'), 'TiOIS')
+temp.setValues({
+    (ric, time): TiOIS[ric][time]
+    for time in _tOIS
+    for ric in _nOIS
+    })
+
+
+ampl.setData(temp)
+
+
+    
+print("Start solver")
+ampl.solve();
+
+# Fetch optimized data
+    
+print("Objective: {}".format(ampl.getObjective('obj').value()))
+f_0 = ampl.getVariable('f_0')
+f_0 = f_0.getValues()
+f_0 = f_0.toPandas()
+
+pi = ampl.getVariable('pi')
+pi = pi.getValues()
+pi = pi.toPandas()
+
+f = ampl.getVariable('f')
+f = f.getValues()
+f = f.toPandas()
+
+
+data = pd.concat([f_0, pi, f], axis=1)
+# Scale data to percentage for plot
+data = data*100
+
+
+zOIS = ampl.getVariable('zOIS')
+zOIS = zOIS.getValues()
+zOIS = zOIS.toPandas()
+z_data = zOIS
+
+# Year fracs for plotting
+
+year_fracs = [ql.SimpleDayCounter().yearFraction(valuation_date, ql.NullCalendar().advance(valuation_date,dt,ql.Days)) for dt in range(len(f))]
+
+# Plot curve
+
+fig1 = plt.figure()
+ax = fig1.add_axes([0,0,1,1])
+plt.plot(year_fracs, data['f_0.val'].values, color='b')
+ax.set_xlabel('Maturity (years)')
+ax.set_ylabel('Yield (%)')
+ax.set_title('OIS Forward Curve')
+plt.show()
+
+
+
+# Pricing functions
+
+def P(f, T):
+    f_T = 0
+    if type(T) == int:
+        for i in range(0,T+1):
+            f_T = f[i] + f_T
+    else:
+        k = np.count_nonzero(T)
+        for i in range(k):
+            for n in range(T[i]+1):
+                f_T = f[n] + f_T
+    return f_T
+
+def OIS_price(f, T0, TN, Ti, dt):
+    floating_leg = math.exp(-P(f,T0)/365) - math.exp(-P(f,TN)/365)
+    fixed_leg = 0
+    if type(dt) == float:
+        fixed_leg = dt*math.exp(-P(f,Ti)/365)
+    else:
+        for i in range(0,len(dt)):
+            fixed_leg = dt[i]*math.exp(-P(f,Ti[i])/365) + fixed_leg
+    return (floating_leg/fixed_leg)
+
+
+# Print results, theoretical and market prices
+
+rounding_dec = 6
+scaling = 100
+
+for i in range(len(OIS)):
+    price = OIS_price(f.values, T0OIS[i], TNOIS[i], TiOIS[i], dtOIS[i])
+    print("Theoretical price", OIS_tenors[i],":", round(price, rounding_dec)*scaling, "Market price:", OIS[i]*scaling, "Error:", round(abs(price-OIS[i]), rounding_dec)*scaling)
+
