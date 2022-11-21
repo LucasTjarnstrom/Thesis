@@ -26,7 +26,7 @@ OIS_tenors = [ "1W", "1M", "2M", "3M" ]
 
 OIS = pd.Series(data=OIS)/100
 
-# Start AMPL
+# Start AMPL 
 # Change the directory to where your AMPL and mod file are located
 
 ampl = AMPL(Environment('C:/Users/Lucas/Documents/Schoolwork/Master/Exjobb/Programmering/AMPL/ampl_mswin64'))
